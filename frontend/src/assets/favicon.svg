@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <style>
+    .wordmark { fill: #031931; }
+    @media (prefers-color-scheme: dark) {
+      .wordmark { fill: #f2f0e9; }
+    }
+  </style>
+  <text class="wordmark" x="32" y="43" text-anchor="middle" font-family="'STIX Two Text', Georgia, serif" font-size="36" font-weight="400">Lug</text>
+</svg>

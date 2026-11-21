@@ -1,0 +1,38 @@
+# Lug systemd 服务单元（Rust v1）
+# 安装：
+#   1. 服务器上构建或上传 release 二进制（见 deploy/README.md）
+#   2. 修改下面的 User / 路径，并将 deploy/lug.env.example 配置到 /etc/lug.env（600 权限）
+#   3. cp deploy/lug.service /etc/systemd/system/lug.service
+#   4. systemctl daemon-reload && systemctl enable --now lug
+
+[Unit]
+Description=Lug - Structured AI calculation API (Rust v1)
+After=network.target
+
+[Service]
+Type=simple
+# 改成你的部署路径与运行用户
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/lug
+# 单静态二进制，无 Python/Node 运行时依赖
+ExecStart=/opt/lug/bin/lug-server
+
+# 只监听本机，由 Caddy/Nginx 反代对外提供 HTTPS
+Environment=HOST=127.0.0.1
+Environment=PORT=8000
+# 环境文件：LUG_PUBLIC_URL / GITHUB_*（OAuth 迁移后生效）与预算护栏等
+EnvironmentFile=/etc/lug.env
+
+Restart=always
+RestartSec=3
+
+# 轻量加固：文件系统只读（仅部署目录可写，api_keys.json 在这里）
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/opt/lug
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

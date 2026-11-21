@@ -1,0 +1,29 @@
+[package]
+name = "lug-server"
+description = "Lug 服务端：HTTP 路由 / API Key 鉴权 / SSE / 静态资源（axum + tokio）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "lug-server"
+path = "src/main.rs"
+
+[[bin]]
+name = "lugctl"
+path = "src/bin/lugctl.rs"
+
+[dependencies]
+lug-engine = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+rand = { workspace = true }
+tokio-stream = { workspace = true }
+reqwest = { workspace = true }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

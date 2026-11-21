@@ -1,0 +1,11 @@
+# Lug 反向代理（Caddy 推荐：自动签发/续期 HTTPS 证书，零配置 TLS）
+#
+# 安装 Caddy 后：
+#   1. 把 lug.example.com 换成你的域名（A 记录指向 VPS）
+#   2. cp deploy/Caddyfile /etc/caddy/Caddyfile && systemctl reload caddy
+#
+# Caddy 默认不缓冲响应，SSE 流式开箱即用。
+
+lug.example.com {
+    reverse_proxy 127.0.0.1:8000
+}

@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.DS_Store
+api_keys.json
+node_modules/
+frontend/test-results/
+frontend/playwright-report/
+.env
+.env.*
+!.env.example
+lug.env
+target/
+node_modules/
+audit.log

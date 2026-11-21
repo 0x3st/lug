@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["crates/lug-engine", "crates/lug-server"]
+
+[workspace.package]
+version = "1.0.0-alpha.2"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+num-bigint = "0.4"
+num-traits = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["arbitrary_precision", "preserve_order"] }
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+sha2 = "0.10"
+rand = "0.9"
+tokio-stream = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+lug-engine = { path = "crates/lug-engine" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
