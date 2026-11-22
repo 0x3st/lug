@@ -114,13 +114,12 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         // 验活（JSON 状态体；worker 自有探针，无 lug-server 对应）
         .route("/healthz", get(healthz))
-        // 静态页面：C8 改由 Workers Static Assets 承载（wrangler.toml [assets]，
-        // run_worker_first 只拦 /f/a/o/*），届时此处整体删除。
-        .route("/", get(stub))
-        .route("/index.html", get(stub))
-        .route("/docs", get(stub))
-        .route("/platform", get(stub))
-        .route("/assets/{name}", get(stub))
+        // 静态页面（/ /index.html /docs /platform /assets/*）**不在 axum 挂路由**：
+        // Workers Static Assets 资产优先路由直接命中（wrangler.toml [assets]，
+        // run_worker_first = ["/f/a/o/*"] 只让 API 进 worker），未命中静态资源
+        // 由 SPA 回退兜底——静态路径根本不会进 fetch handler。lug-server 的
+        // serve_html_* / serve_asset 读盘逻辑随之退役（ASSETS binding 保留在
+        // wrangler.toml 供未来模板化改写用）。
         // 计算 API
         .route("/f/a/o/operator", get(operator_table))
         .route("/f/a/o/calculate", post(calculate))
@@ -563,18 +562,8 @@ async fn healthz() -> Response {
     )
 }
 
-/// 未接线路由占位（platform API / OAuth 在 C6/C7 替换；静态路由 C8 删除）。
-async fn stub(req: axum::extract::Request) -> Response {
-    api_error(
-        StatusCode::NOT_IMPLEMENTED,
-        &format!(
-            "{} is registered but its handler has not been migrated to Workers yet (T4 skeleton).",
-            req.uri().path()
-        ),
-        "not_implemented_error",
-        None,
-    )
-}
+/// 未接线路由占位已全部退役——所有 /f/a/o/* 路由均为真实现；
+/// 静态路径由 Workers Static Assets 承载（见 router() 注释）。
 
 /// GET /f/a/o/operator：注册表生成的编码表（Bearer Key 鉴权）。
 /// D1 绑定 future 非 Send（worker 绑定类型通病，tech-notes §1）：与官方
