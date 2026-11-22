@@ -64,6 +64,12 @@ pub fn token_urlsafe(nbytes: usize) -> String {
     base64url(&random::token_bytes(nbytes))
 }
 
+/// 小写 hex 编码（请求 ID / Key id 用；与 lug-server `format!("{b:02x}")`
+/// 拼接逐字节一致）。
+pub fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,6 +118,18 @@ mod tests {
         assert!(!const_eq("a", "ab")); // 长度不同直接 false
         assert!(!const_eq("ab", "a"));
         assert!(!const_eq("A", "a")); // 大小写敏感
+    }
+
+    #[test]
+    fn hex_encode_is_lowercase_two_digits_per_byte() {
+        assert_eq!(hex_encode(&[]), "");
+        assert_eq!(hex_encode(&[0x0f, 0xa0, 0x01]), "0fa001");
+        assert_eq!(hex_encode(&[0xff; 6]), "ffffffffffff");
+        // 与 lug-server random_hex 的 per-byte format! 等价（golden 面校验）
+        assert_eq!(
+            hex_encode(&[0x12, 0x34]),
+            format!("{}{}", format!("{:02x}", 0x12u8), format!("{:02x}", 0x34u8))
+        );
     }
 
     // token_urlsafe 不做 host 单测：随机源是 wasm FFI（非 wasm 桩 panic），
