@@ -665,6 +665,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tower-service",
+ "web-sys",
  "worker",
  "worker-macros",
 ]
