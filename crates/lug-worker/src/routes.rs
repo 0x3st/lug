@@ -613,7 +613,7 @@ async fn calculate(
                     prompt_tokens: 0,
                     completion_tokens: 0,
                     duration_ms: elapsed_ms(started),
-                });
+                }).await;
                 return response;
             }
         };
@@ -638,7 +638,7 @@ async fn calculate(
                     prompt_tokens: 0,
                     completion_tokens: 0,
                     duration_ms: elapsed_ms(started),
-                });
+                }).await;
                 return engine_error_response(&e);
             }
             Err(_) => {
@@ -653,7 +653,7 @@ async fn calculate(
                     prompt_tokens: 0,
                     completion_tokens: 0,
                     duration_ms: elapsed_ms(started),
-                });
+                }).await;
                 return api_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     MSG,
@@ -688,7 +688,7 @@ async fn calculate(
             prompt_tokens: output.usage.prompt_tokens as u64,
             completion_tokens: output.usage.completion_tokens as u64,
             duration_ms: elapsed_ms(started),
-        });
+        }).await;
 
         if process {
             return crate::sse::sse_axum_response(crate::sse::build_events(&expr, &output));
@@ -879,7 +879,7 @@ async fn platform_key_revoke(
                     prompt_tokens: 0,
                     completion_tokens: 0,
                     duration_ms: 0,
-                });
+                }).await;
                 json_response(StatusCode::OK, key_revoked_json(&rec.id, &rec.status))
             }
             // RETURNING 0 行 = 未命中/他人 Key/已撤销 → 404（IDOR 语义）
