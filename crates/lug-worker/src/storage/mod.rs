@@ -20,6 +20,7 @@
 //! `all()` 取回。真实 D1/KV 运行时交互留 T7 集成验证；本层单测覆盖 SQL/参数
 //! 构造、行解析与序列化逻辑。
 
+pub mod audit;
 pub mod keystore;
 
 use worker::{D1Database, D1PreparedStatement, D1Type};
