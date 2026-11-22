@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/lug-engine", "crates/lug-server"]
+members = ["crates/lug-engine", "crates/lug-server", "crates/lug-worker"]
 
 [workspace.package]
 version = "1.0.0-alpha.2"
@@ -19,6 +19,10 @@ rand = "0.9"
 tokio-stream = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 lug-engine = { path = "crates/lug-engine" }
+# —— CF Workers（wasm-only crate，仅 lug-worker 引用；host 构建不编译）——
+worker = { version = "0.9", features = ["http", "axum"] }
+worker-macros = { version = "0.9", features = ["http"] }
+futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 
 [profile.release]
 lto = true
