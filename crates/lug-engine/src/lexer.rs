@@ -47,6 +47,17 @@ pub fn tokenize(s: &str) -> Result<Vec<Token>, ExprError> {
 
         // 2. ASCII 数字/小数点字面量
         if c.is_ascii_digit() || c == '.' {
+            // T9a S5：进制前缀 0x/0b/0o（大小写均接受，与 Python 一致）
+            if c == '0'
+                && i + 1 < n
+                && matches!(chars[i + 1], 'x' | 'X' | 'b' | 'B' | 'o' | 'O')
+            {
+                let (value, len) = lex_radix(&chars[i..])?;
+                tokens.push(Token::Num(value));
+                i += len;
+                prev_end = i;
+                continue;
+            }
             let (value, len) = lex_number(&chars[i..])?;
             tokens.push(Token::Num(value));
             i += len;
@@ -213,6 +224,37 @@ fn lex_number(chars: &[char]) -> Result<(Value, usize), ExprError> {
                 Value::Big(BigInt::parse_bytes(text.as_bytes(), 10).expect("纯数字串必可解析"))
             }
         }
+    };
+    Ok((value, i))
+}
+
+/// 进制字面量：0x/0X 十六进制、0b/0B 二进制、0o/0O 八进制（T9a S5）。
+/// 前缀后连续扫描字母数字 run，整 run 校验：任一位非法或 run 为空 →
+/// "Invalid number literal: {0x+run}"（与 1.2.3 的既有文案同族）。
+/// Int 放不下自动晋升 Big（BigInt::parse_bytes）。
+fn lex_radix(chars: &[char]) -> Result<(Value, usize), ExprError> {
+    let radix = match chars[1] {
+        'x' | 'X' => 16u32,
+        'b' | 'B' => 2,
+        'o' | 'O' => 8,
+        _ => unreachable!("调用方已判定前缀"),
+    };
+    let mut i = 2usize;
+    while i < chars.len() && chars[i].is_ascii_alphanumeric() {
+        i += 1;
+    }
+    let digits: String = chars[2..i].iter().collect();
+    let text: String = chars[..i].iter().collect();
+    if digits.is_empty() || digits.chars().any(|d| d.to_digit(radix).is_none()) {
+        return Err(ExprError::expression(format!(
+            "Invalid number literal: {text}"
+        )));
+    }
+    let value = match i64::from_str_radix(&digits, radix) {
+        Ok(v) => Value::Int(v),
+        Err(_) => Value::Big(
+            BigInt::parse_bytes(digits.as_bytes(), radix).expect("已验证位必可解析"),
+        ),
     };
     Ok((value, i))
 }
