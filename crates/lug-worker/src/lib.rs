@@ -9,6 +9,7 @@
 //! 持久化（D1/KV）由 T5 接入，OAuth 由 T6 接入——均经 fetch 的 `env` 取绑定。
 
 pub mod sse;
+pub mod oauth;
 
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
