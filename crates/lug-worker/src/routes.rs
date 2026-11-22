@@ -17,8 +17,15 @@ use serde_json::json;
 /// T5/T6 接入持久化与 OAuth 后，此处追加 `.with_state(...)`。
 pub fn router() -> Router {
     Router::new()
-        // 验活
+        // 验活（JSON 状态体）
         .route("/healthz", get(healthz))
+        // 静态页面：T4 先挂 501 stub 占位；T7 决定去留——若改由 Workers
+        // Static Assets 承载（wrangler.toml [assets]），此处可整体删除。
+        .route("/", get(stub))
+        .route("/index.html", get(stub))
+        .route("/docs", get(stub))
+        .route("/platform", get(stub))
+        .route("/assets/{name}", get(stub))
         // 计算 API
         .route("/f/a/o/operator", get(stub))
         .route("/f/a/o/calculate", post(stub))
@@ -95,16 +102,24 @@ fn json_response(status: StatusCode, body: serde_json::Value) -> Response {
 
 // ------------------------------------------------------------------ handlers
 
-async fn healthz() -> &'static str {
-    "ok"
+/// 验活：200 + JSON 状态体（自定结构，供部署探针/冒烟用）。
+async fn healthz() -> Response {
+    json_response(
+        StatusCode::OK,
+        json!({"ok": true, "service": "lug-worker", "phase": "skeleton"}),
+    )
 }
 
 /// T7 集成前的占位：路由表已就位，业务逻辑待迁移。
-async fn stub() -> Response {
+/// 统一 api_error 结构 + 自定 `not_implemented_error` type（与计费类错误区分）。
+async fn stub(req: axum::extract::Request) -> Response {
     api_error(
         StatusCode::NOT_IMPLEMENTED,
-        "handler pending migration (T7 integration)",
-        "internal_error",
+        &format!(
+            "{} is registered but its handler has not been migrated to Workers yet (T4 skeleton).",
+            req.uri().path()
+        ),
+        "not_implemented_error",
         None,
     )
 }
@@ -135,4 +150,109 @@ async fn fallback(method: axum::http::Method, req: axum::extract::Request) -> Re
     // axum 0.8 的 method_not_allowed_fallback 不经过 Router::layer，CORS 需手动补
     apply_cors(&path, res.headers_mut());
     res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body as AxumBody;
+    use axum::http::Request;
+    use http_body_util::BodyExt;
+    use tower_service::Service;
+
+    async fn send(method: &str, uri: &str) -> Response {
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(AxumBody::empty())
+            .unwrap();
+        let mut svc = router();
+        svc.call(req).await.unwrap()
+    }
+
+    async fn body_json(res: Response) -> serde_json::Value {
+        let bytes = BodyExt::collect(res.into_body()).await.unwrap().to_bytes();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn healthz_returns_200_json_ok() {
+        let res = send("GET", "/healthz").await;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers()["content-type"],
+            "application/json"
+        );
+        let v = body_json(res).await;
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["service"], "lug-worker");
+    }
+
+    #[tokio::test]
+    async fn every_registered_route_is_501_not_implemented() {
+        let table = [
+            ("GET", "/"),
+            ("GET", "/index.html"),
+            ("GET", "/docs"),
+            ("GET", "/platform"),
+            ("GET", "/assets/app.css"),
+            ("GET", "/f/a/o/operator"),
+            ("POST", "/f/a/o/calculate"),
+            ("GET", "/f/a/o/platform/auth"),
+            ("GET", "/f/a/o/platform/me"),
+            ("GET", "/f/a/o/platform/auth/github"),
+            ("GET", "/f/a/o/platform/auth/github/callback"),
+            ("POST", "/f/a/o/platform/logout"),
+            ("GET", "/f/a/o/platform/keys"),
+            ("POST", "/f/a/o/platform/keys"),
+            ("DELETE", "/f/a/o/platform/keys/k-123"),
+            ("GET", "/f/a/o/platform/usage"),
+        ];
+        for (m, u) in table {
+            let res = send(m, u).await;
+            assert_eq!(res.status(), StatusCode::NOT_IMPLEMENTED, "{m} {u}");
+            let v = body_json(res).await;
+            assert_eq!(v["error"]["type"], "not_implemented_error", "{m} {u}");
+            assert!(v["error"]["param"].is_null(), "{m} {u}");
+            assert!(!v["error"]["message"].as_str().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn public_api_gets_open_cors_headers() {
+        // OPTIONS 打在仅 POST 的路由上 → method_not_allowed_fallback → 204 + CORS
+        let res = send("OPTIONS", "/f/a/o/calculate").await;
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+        assert_eq!(res.headers()["Access-Control-Allow-Origin"], "*");
+        assert_eq!(
+            res.headers()["Access-Control-Allow-Headers"],
+            "Authorization, Content-Type"
+        );
+        assert_eq!(
+            res.headers()["Access-Control-Allow-Methods"],
+            "GET, POST, OPTIONS"
+        );
+    }
+
+    #[tokio::test]
+    async fn platform_routes_get_no_store_no_referrer() {
+        let res = send("GET", "/f/a/o/platform/me").await;
+        assert_eq!(res.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(res.headers()["Cache-Control"], "no-store");
+        assert_eq!(res.headers()["Referrer-Policy"], "no-referrer");
+        assert!(res.headers().get("Access-Control-Allow-Origin").is_none());
+    }
+
+    #[tokio::test]
+    async fn unknown_route_is_contract_404_with_cors() {
+        let res = send("GET", "/nope").await;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        assert_eq!(res.headers()["Access-Control-Allow-Origin"], "*");
+        let v = body_json(res).await;
+        assert_eq!(v["error"]["type"], "invalid_request_error");
+        assert!(v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Unknown request URL (GET /nope)"));
+    }
 }
