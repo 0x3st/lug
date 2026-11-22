@@ -8,49 +8,52 @@
 //! wasm 侧经 `entry::sse_response`（`worker::Body::from_stream`）变 JS
 //! ReadableStream 回放，零延迟即发即收（§4.2：事件即算即发）。
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 /// 单个事件 → SSE 帧：`data: <payload>\n\n`。
 pub fn sse_frame(payload: &str) -> String {
     format!("data: {payload}\n\n")
 }
 
+/// 已序列化的 serde_json::Value 事件序列 → SSE 帧序列
+/// （逐帧 `data: {json}\n\n`；wire 格式与 axum `Sse` 逐字节一致）。
+pub fn frames_from_values(events: Vec<Value>) -> Vec<String> {
+    events
+        .into_iter()
+        .map(|ev| sse_frame(&ev.to_string()))
+        .collect()
+}
+
 /// 计算过程流的事件序列构造（与 lug-server `sse_stream` 逐字段对齐）。
 /// `expr`：原始表达式；`output`：引擎求值输出（steps 预生成）。
+/// 序列：prefix → step×N（cost_tokens 恒为 1，D2）→ final → [DONE]。
 pub fn build_events(expr: &str, output: &lug_engine_shim::EvalOutput) -> Vec<String> {
-    let mut frames = Vec::with_capacity(output.steps.len() + 3);
+    let mut events = Vec::with_capacity(output.steps.len() + 2);
 
-    frames.push(sse_frame(
-        &json!({"type": "prefix", "prefix": output.prefix_display}).to_string(),
-    ));
+    events.push(json!({"type": "prefix", "prefix": output.prefix_display}));
 
     for st in &output.steps {
-        frames.push(sse_frame(
-            &json!({
-                "type": "step",
-                "cost_tokens": 1,
-                "step": st.step,
-                "expr": st.expr,
-                "operator": st.operator,
-                "operator_code": st.operator_code,
-                "result": lug_engine_shim::num_to_json(&st.result),
-                "state": st.state,
-            })
-            .to_string(),
-        ));
+        events.push(json!({
+            "type": "step",
+            "cost_tokens": 1,
+            "step": st.step,
+            "expr": st.expr,
+            "operator": st.operator,
+            "operator_code": st.operator_code,
+            "result": lug_engine_shim::num_to_json(&st.result),
+            "state": st.state,
+        }));
     }
 
-    frames.push(sse_frame(
-        &json!({
-            "type": "final",
-            "expression": expr,
-            "result": lug_engine_shim::num_to_json(&output.result),
-            "steps_count": output.steps.len(),
-            "usage": lug_engine_shim::usage_json(&output.usage),
-        })
-        .to_string(),
-    ));
+    events.push(json!({
+        "type": "final",
+        "expression": expr,
+        "result": lug_engine_shim::num_to_json(&output.result),
+        "steps_count": output.steps.len(),
+        "usage": lug_engine_shim::usage_json(&output.usage),
+    }));
 
+    let mut frames = frames_from_values(events);
     frames.push(sse_frame("[DONE]"));
     frames
 }
@@ -152,6 +155,29 @@ mod tests {
         assert!(frames[2].contains("\"prompt_tokens\":3"));
 
         assert_eq!(frames[3], "data: [DONE]\n\n");
+    }
+
+    #[test]
+    fn frames_from_values_wrap_each_payload() {
+        let frames = frames_from_values(vec![
+            json!({"type": "prefix", "prefix": "x"}),
+            json!({"n": 1}),
+        ]);
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0], "data: {\"type\":\"prefix\",\"prefix\":\"x\"}\n\n");
+        assert_eq!(frames[1], "data: {\"n\":1}\n\n");
+    }
+
+    #[test]
+    fn empty_steps_stream_is_prefix_final_done() {
+        let mut out = sample_output();
+        out.steps.clear();
+        let frames = build_events("1+2", &out);
+        assert_eq!(frames.len(), 3); // prefix + final(steps_count:0) + [DONE]
+        assert!(frames[0].contains("\"type\":\"prefix\""));
+        assert!(frames[1].contains("\"type\":\"final\""));
+        assert!(frames[1].contains("\"steps_count\":0"));
+        assert_eq!(frames[2], "data: [DONE]\n\n");
     }
 
     #[test]
