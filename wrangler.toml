@@ -26,7 +26,7 @@ command = "worker-build crates/lug-worker --release"
 directory = "./web"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/f/a/o/*"]
+run_worker_first = ["/f/a/o/*", "/healthz"]
 
 # —— KV（会话，T5 接入）——
 [[kv_namespaces]]
