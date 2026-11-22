@@ -200,7 +200,7 @@ fn json_response(status: StatusCode, body: serde_json::Value) -> Response {
 }
 
 /// Bearer API Key 鉴权失败的 401（消息与原型逐字节一致）。
-pub const UNAUTHORIZED_MESSAGE: &str = "Missing or invalid API key. Create one in the platform console (GET /platform) and pass it in the 'Authorization: Bearer ***' header.";
+pub const UNAUTHORIZED_MESSAGE: &str = "Missing or invalid API key. Create one in the platform console (GET /platform) and pass it in the 'Authorization: Bearer sk-xxx' header.";
 
 pub fn unauthorized() -> Response {
     api_error(
