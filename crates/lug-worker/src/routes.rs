@@ -100,6 +100,36 @@ fn json_response(status: StatusCode, body: serde_json::Value) -> Response {
     (status, Json(body)).into_response()
 }
 
+// ------------------------------------------------------ 引擎数值 → JSON
+
+/// 引擎数值 → JSON 数字。Big/Float 经**十进制字面量**构造（arbitrary_precision），
+/// 输出与 Python `json.dumps` 逐字节一致（含 2.0、0.0→0 的双格式化语义）。
+/// 逐字平移自 lug-server/src/routes.rs::num_to_json（契约源，只读）。
+pub fn num_to_json(v: &lug_engine::Value) -> serde_json::Value {
+    match v {
+        lug_engine::Value::Int(i) => json!(i),
+        lug_engine::Value::Big(b) => {
+            serde_json::from_str(&b.to_string()).unwrap_or(serde_json::Value::Null)
+        }
+        lug_engine::Value::Float(f) => {
+            // 先 format_num（整数化），再用 py repr 字面量（与 Python json 一致）
+            let disp = lug_engine::value::format_num(*f).to_display();
+            serde_json::from_str(&disp).unwrap_or(serde_json::Value::Null)
+        }
+    }
+}
+
+/// 计费用量 → JSON（字段序与 lug-server usage_json 一致；preserve_order 下
+/// 插入序即输出序）。逐字平移自 lug-server/src/routes.rs::usage_json。
+pub fn usage_json(u: &lug_engine::Usage) -> serde_json::Value {
+    json!({
+        "prompt_tokens": u.prompt_tokens,
+        "completion_tokens": u.completion_tokens,
+        "total_tokens": u.total_tokens,
+        "completion_tokens_details": {"reasoning_tokens": u.reasoning_tokens},
+    })
+}
+
 // ------------------------------------------------------------------ handlers
 
 /// 验活：200 + JSON 状态体（自定结构，供部署探针/冒烟用）。
@@ -179,10 +209,7 @@ mod tests {
     async fn healthz_returns_200_json_ok() {
         let res = send("GET", "/healthz").await;
         assert_eq!(res.status(), StatusCode::OK);
-        assert_eq!(
-            res.headers()["content-type"],
-            "application/json"
-        );
+        assert_eq!(res.headers()["content-type"], "application/json");
         let v = body_json(res).await;
         assert_eq!(v["ok"], true);
         assert_eq!(v["service"], "lug-worker");

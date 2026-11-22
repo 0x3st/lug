@@ -17,6 +17,9 @@ tower-service = "0.3.3"
 futures = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+# T7.5 接线：真链接计算引擎（退役 sse.rs 的 lug_engine_shim）。
+# 纯计算库（num-bigint/num-traits），依赖树 wasm32 兼容（wasm check 实证）。
+lug-engine = { workspace = true }
 # worker 随 T7 集成移入门控外公共依赖（集成侧调整）：storage/oauth 模块
 # 无条件 `use worker::*`，而 host 单测必须覆盖 T5/T6 用例——T5/T6 分支实证
 # worker 0.9 可 host 编译链接，骨架「worker 是 wasm-only crate」前提不成立。

@@ -9,11 +9,11 @@
 //!
 //! 依据：lug-migration/notes/workers-rs-tech-notes.md §1/§2。
 
+pub mod oauth;
 pub mod panic_guard;
 pub mod routes;
 pub mod sse;
 pub mod storage;
-pub mod oauth;
 
 #[cfg(target_arch = "wasm32")]
 pub mod entry;
