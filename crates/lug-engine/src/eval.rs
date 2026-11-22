@@ -22,8 +22,11 @@ pub const MAX_AGGREGATE_ITERATIONS: i64 = 1_000_000;
 pub const MAX_FACTORIAL_N: u64 = 10_000;
 
 /// 函数应用统一入口：arity 校验 → 求值核 → format_num（与全引擎一致）。
+/// 可调用符号（后缀/函数/特殊形式）经 callable_by_symbol 查找——`%` 的
+/// 首个注册项是二元取模，函数侧必须命中百分号后缀定义（T9a S1）。
 pub fn apply_function(symbol: &str, args: &[Value], ctx: &Ctx) -> Result<Value, String> {
-    let def = registry::by_symbol(symbol).ok_or_else(|| format!("Unknown function '{symbol}'"))?;
+    let def = registry::callable_by_symbol(symbol)
+        .ok_or_else(|| format!("Unknown function '{symbol}'"))?;
     let arity = def
         .arity
         .ok_or_else(|| format!("'{symbol}' is not a function"))?;
@@ -60,6 +63,15 @@ fn as_f64(v: &Value) -> Result<f64, String> {
 fn apply_raw(symbol: &str, args: &[Value], ctx: &Ctx) -> Result<Value, String> {
     match symbol {
         "!" => factorial(&args[0], ctx),
+        "%" => Ok(match &args[0] {
+            // 百分号后缀：除以 100，恒出 Float（整数化展示由 format_num 统一处理）
+            Value::Int(v) => Value::Float(*v as f64 / 100.0),
+            Value::Big(b) => match b.to_f64() {
+                Some(f) => Value::Float(f / 100.0),
+                None => return Err("Numeric overflow".to_string()),
+            },
+            Value::Float(f) => Value::Float(f / 100.0),
+        }),
         "abs" => Ok(match &args[0] {
             Value::Int(v) => Value::Int(v.abs()),
             Value::Big(b) => Value::Big(b.clone().abs()),

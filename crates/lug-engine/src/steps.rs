@@ -194,9 +194,10 @@ impl Evaluator {
                     ))
                 })?;
                 self.substitute(*span, res.clone());
-                let code = crate::registry::by_symbol(symbol)
+                // 后缀符号（`!`/`%`）的编码取自可调用定义（% 的首个注册项是二元取模）
+                let code = crate::registry::callable_by_symbol(symbol)
                     .map(|d| d.code)
-                    .unwrap_or_else(|| panic!("注册表缺少符号 {symbol}"));
+                    .unwrap_or_else(|| panic!("注册表缺少后缀符号 {symbol}"));
                 if !self.suppress {
                     self.steps.push(Step {
                         step: self.steps.len() + 1,

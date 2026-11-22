@@ -131,16 +131,45 @@ impl<'a> Parser<'a> {
     }
 
     /// 后缀链：`3!!` = (3!)!；优先级高于 `**`（3!**2 = (3!)² = 36）。
+    /// T9a S1：`%` 百分号后缀与 `!` 同层（prec=30）。同一 `%` token 的双角色
+    /// 按语法位置区分：仅当其后不跟操作数起始 token（数字/标识符/`(`/带符号
+    /// 一元）时视为后缀，否则保持二元取模（差分语料语义逐字节不变）。
+    /// 连写 `%%` 报语法错误（先 % 后无意义）。
     fn parse_postfix(&mut self) -> Result<Node, ExprError> {
         let mut node = self.parse_atom()?;
-        while let Some(Token::Op("!")) = self.peek() {
-            self.advance();
-            let span: Span = (node.span().0, self.pos);
-            node = Node::Postfix {
-                symbol: "!",
-                operand: Box::new(node),
-                span,
-            };
+        let mut percent_applied = false;
+        loop {
+            match self.peek() {
+                Some(Token::Op("!")) => {
+                    self.advance();
+                    let span: Span = (node.span().0, self.pos);
+                    node = Node::Postfix {
+                        symbol: "!",
+                        operand: Box::new(node),
+                        span,
+                    };
+                }
+                Some(Token::Op("%")) => {
+                    if starts_operand(self.toks.get(self.pos + 1)) {
+                        break; // 二元取模：交给 mul 层
+                    }
+                    if percent_applied {
+                        return Err(ExprError::expression(format!(
+                            "Syntax error: unexpected '%' at position {}, expected a number or '('",
+                            self.pos
+                        )));
+                    }
+                    self.advance();
+                    let span: Span = (node.span().0, self.pos);
+                    node = Node::Postfix {
+                        symbol: "%",
+                        operand: Box::new(node),
+                        span,
+                    };
+                    percent_applied = true;
+                }
+                _ => break,
+            }
         }
         Ok(node)
     }
@@ -304,4 +333,15 @@ fn bin_op_of(symbol: &str) -> crate::value::BinOp {
     registry::by_symbol(symbol)
         .and_then(|d| d.op)
         .unwrap_or_else(|| panic!("注册表缺少二元符号 {symbol}"))
+}
+
+/// `%` 位置区分：这些 token 出现在 `%` 之后 → 二元取模的操作数起点；
+/// 其余（运算符/`)`/`,`/结尾）→ 百分号后缀。
+fn starts_operand(t: Option<&Token>) -> bool {
+    match t {
+        None => false,
+        Some(Token::Num(_)) | Some(Token::Ident(_)) | Some(Token::Paren('(')) => true,
+        Some(Token::Op(s)) => *s == "+" || *s == "-",
+        Some(Token::Paren(_)) => false,
+    }
 }

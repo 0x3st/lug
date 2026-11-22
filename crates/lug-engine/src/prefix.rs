@@ -73,11 +73,13 @@ fn walk(node: &Node, toks: &mut Vec<PrefixTok>, syms: &mut Vec<String>) {
         Node::Postfix {
             symbol, operand, ..
         } => {
-            // 后缀在前序 IR 中前置表示（! 5）
-            let code = code_of(symbol);
+            // 后缀在前序 IR 中前置表示（! 5 / % 50）；编码取自可调用定义
+            let code = crate::registry::callable_by_symbol(symbol)
+                .map(|d| d.code)
+                .unwrap_or_else(|| panic!("注册表缺少后缀符号 {symbol}"));
             let sub = ast_to_prefix(operand);
             toks.push(PrefixTok::Func(code, vec![sub.tokens]));
-            syms.push(format!("! {}", sub.display));
+            syms.push(format!("{symbol} {}", sub.display));
         }
         Node::Bin {
             symbol,

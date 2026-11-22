@@ -9,6 +9,9 @@
 //!
 //! 新增运算 = 在 [`REGISTRY`] 追加 `OpDef` + 在 `eval.rs` 挂求值核 +
 //! 差分/单元用例，路由/IR/步骤/编码表全部自动生效。
+//!
+//! T9a 扩展区（只增不改）：7–10 位运算二元；17 百分号后缀；
+//! 48–55 组合数学；64–71 反三角/双曲/按位非。
 
 use crate::value::BinOp;
 
@@ -118,6 +121,19 @@ pub const REGISTRY: &[OpDef] = &[
         code: 16,
         symbol: "!",
         name: "阶乘",
+        kind: OpKind::Postfix,
+        op: None,
+        precedence: 30,
+        associativity: Assoc::Left,
+        aliases: &[],
+        arity: Some(Arity::Exact(1)),
+    },
+    // T9a S1：百分号后缀（与二元 `%` 取模同一符号，语法位置区分；
+    // 可调用符号经 callable_by_symbol 查找，by_symbol 首个命中仍是二元取模）
+    OpDef {
+        code: 17,
+        symbol: "%",
+        name: "百分比",
         kind: OpKind::Postfix,
         op: None,
         precedence: 30,
@@ -403,6 +419,18 @@ pub const CONSTANTS: &[(&str, f64)] = &[
 
 pub fn by_symbol(symbol: &str) -> Option<&'static OpDef> {
     REGISTRY.iter().find(|d| d.symbol == symbol)
+}
+
+/// 可调用符号（后缀/函数/特殊形式）查找：`%` 同时注册为二元取模（code 5）
+/// 与百分号后缀（code 17），求值核/步骤/IR 的函数侧查找必须命中后缀定义。
+pub fn callable_by_symbol(symbol: &str) -> Option<&'static OpDef> {
+    REGISTRY.iter().find(|d| {
+        d.symbol == symbol
+            && matches!(
+                d.kind,
+                OpKind::Postfix | OpKind::Function | OpKind::Special
+            )
+    })
 }
 
 pub fn by_code(code: u16) -> Option<&'static OpDef> {
