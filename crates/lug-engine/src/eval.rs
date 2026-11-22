@@ -170,10 +170,16 @@ fn apply_raw(symbol: &str, args: &[Value], ctx: &Ctx) -> Result<Value, String> {
         "atan" => finite(as_f64(&args[0])?.atan()),
         // 象限完整；atan2(0, 0) = 0（Rust f64::atan2 与 Python math.atan2 一致）
         "atan2" => finite(as_f64(&args[0])?.atan2(as_f64(&args[1])?)),
-        // T9a S3：双曲（溢出 → D3 家族 "Numeric overflow"）
+        // T9a S4：双曲（溢出 → D3 家族 "Numeric overflow"）
         "sinh" => finite(as_f64(&args[0])?.sinh()),
         "cosh" => finite(as_f64(&args[0])?.cosh()),
         "tanh" => finite(as_f64(&args[0])?.tanh()),
+        // T9a S4：按位非（仅整数域；num-bigint Not = 补码 −x−1）
+        "~" => match &args[0] {
+            Value::Int(v) => Ok(Value::Int(!v)),
+            Value::Big(b) => Ok(Value::Big(!b.clone())),
+            Value::Float(_) => Err("Bitwise operations require integer operands".to_string()),
+        },
         "gcd" | "lcm" => {
             let sig = format!("{symbol}()");
             for arg in args {

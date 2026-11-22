@@ -50,6 +50,11 @@ pub enum BinOp {
     FloorDiv,
     Mod,
     Pow,
+    /// T9a S4 位运算（仅整数域；Python 补码语义）。
+    BitAnd,
+    BitOr,
+    BitShl,
+    BitShr,
 }
 
 impl BinOp {
@@ -63,9 +68,16 @@ impl BinOp {
             BinOp::FloorDiv => "//",
             BinOp::Mod => "%",
             BinOp::Pow => "**",
+            BinOp::BitAnd => "&",
+            BinOp::BitOr => "|",
+            BinOp::BitShl => "<<",
+            BinOp::BitShr => ">>",
         }
     }
 }
+
+/// 位运算类型错误（v1 新增语义，S4）。
+const BITWISE_TYPE_ERR: &str = "Bitwise operations require integer operands";
 
 /// 浮点收尾的便捷包装：非有限 → "Numeric overflow"（D3）。
 fn finite(f: f64) -> Result<Value, String> {
@@ -392,6 +404,73 @@ fn compute_raw(a: &Value, op: BinOp, b: &Value, ctx: &Ctx) -> Result<Value, Stri
                 Value::Float(_) => unreachable!("浮点分支已在前处理"),
             }
         }
+        BinOp::BitAnd | BinOp::BitOr => {
+            // 仅整数域；负数走补码语义（num-bigint & | 与 Python 一致）
+            if Value::either_float(a, b) {
+                return Err(BITWISE_TYPE_ERR.to_string());
+            }
+            let is_and = op == BinOp::BitAnd;
+            match (a, b) {
+                (Value::Int(x), Value::Int(y)) => {
+                    Ok(Value::Int(if is_and { x & y } else { x | y }))
+                }
+                _ => {
+                    let r = if is_and {
+                        a.to_big() & b.to_big()
+                    } else {
+                        a.to_big() | b.to_big()
+                    };
+                    check_budget_big(&r, ctx)?;
+                    Ok(value_to_int_or_big(r))
+                }
+            }
+        }
+        BinOp::BitShl | BinOp::BitShr => {
+            if Value::either_float(a, b) {
+                return Err(BITWISE_TYPE_ERR.to_string());
+            }
+            // 负移位 → 域错误（Python: negative shift count）
+            let negative = match b {
+                Value::Int(v) => *v < 0,
+                Value::Big(b) => b.sign() == num_bigint::Sign::Minus,
+                Value::Float(_) => unreachable!("浮点已拦截"),
+            };
+            if negative {
+                return Err("Shift count must be non-negative".to_string());
+            }
+            // Big 移位量超出 u64 → 饱和（左移随即被位数预估拦截）
+            let shift: u64 = match b {
+                Value::Int(v) => *v as u64,
+                Value::Big(b) => b.to_u64().unwrap_or(u64::MAX),
+                Value::Float(_) => unreachable!("浮点已拦截"),
+            };
+            if op == BinOp::BitShl {
+                // D4 复用：digits(1<<s) ≤ ceil(s·log10 2)，先预估后物化（防内存爆炸）
+                let est = ((shift as f64 * std::f64::consts::LOG10_2).ceil() as usize)
+                    .min(usize::MAX);
+                if est > ctx.max_digits {
+                    return Err(format!(
+                        "Result would have {est} digits (budget: {})",
+                        ctx.max_digits
+                    ));
+                }
+                let r = a.to_big() << shift;
+                check_budget_big(&r, ctx)?;
+                Ok(value_to_int_or_big(r))
+            } else {
+                // 右移单调缩小，无需预算；结果转 Int（若放得下）
+                let r = a.to_big() >> shift;
+                Ok(value_to_int_or_big(r))
+            }
+        }
+    }
+}
+
+/// BigInt 结果在 i64 范围内时降为 Int（与引擎快路径口径一致）。
+fn value_to_int_or_big(r: BigInt) -> Value {
+    match r.to_i64() {
+        Some(v) => Value::Int(v),
+        None => Value::Big(r),
     }
 }
 

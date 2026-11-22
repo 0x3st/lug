@@ -24,7 +24,7 @@ pub fn parse_tokens(tokens: &[Token]) -> Result<Node, ExprError> {
         toks: tokens,
         pos: 0,
     };
-    let root = p.parse_add()?;
+    let root = p.parse_binary(6)?;
     if p.pos != tokens.len() {
         // Python: rest = " ".join(str(t[1]) for t in tokens[pos:])（原始值，非格式化）
         let rest = tokens[p.pos..]
@@ -68,42 +68,34 @@ impl<'a> Parser<'a> {
         t
     }
 
-    fn parse_add(&mut self) -> Result<Node, ExprError> {
-        let mut left = self.parse_mul()?;
-        let syms = registry::symbols_at(10, registry::Assoc::Left);
-        while let Some(Token::Op(s)) = self.peek() {
-            if !syms.contains(s) {
-                break;
-            }
-            let s = *s;
-            self.advance();
-            let right = self.parse_mul()?;
-            let span: Span = (left.span().0, right.span().1);
-            left = Node::Bin {
-                op: bin_op_of(s),
-                symbol: s,
-                left: Box::new(left),
-                right: Box::new(right),
-                span,
-            };
-        }
-        Ok(left)
-    }
-
-    fn parse_mul(&mut self) -> Result<Node, ExprError> {
+    /// 左结合二元统一优先级爬升（T9a S4：add/mul/位运算五层合一）。
+    ///
+    /// 层级（Python 相对序）：|=6 < &=7 < <</>>=8 < add=10 < mul=20；
+    /// `**`（25，右结合）仍由 parse_power 处理，不在本层。
+    /// 逐层文法会随优先级层数线性增长括号嵌套的栈深（200 层括号即栈溢出），
+    /// 爬升式每层恒定 1 帧，AST 与逐层文法逐字节一致（左结合折叠等价）。
+    fn parse_binary(&mut self, min_prec: u8) -> Result<Node, ExprError> {
         let mut left = self.parse_unary()?;
-        let syms = registry::symbols_at(20, registry::Assoc::Left);
-        while let Some(Token::Op(s)) = self.peek() {
-            if !syms.contains(s) {
-                break;
-            }
-            let s = *s;
+        loop {
+            let (prec, symbol) = match self.peek() {
+                Some(Token::Op(s)) => match registry::by_symbol(s) {
+                    Some(def)
+                        if def.kind == registry::OpKind::Binary
+                            && def.associativity == registry::Assoc::Left
+                            && def.precedence >= min_prec =>
+                    {
+                        (def.precedence, *s)
+                    }
+                    _ => break,
+                },
+                _ => break,
+            };
             self.advance();
-            let right = self.parse_unary()?;
+            let right = self.parse_binary(prec + 1)?;
             let span: Span = (left.span().0, right.span().1);
             left = Node::Bin {
-                op: bin_op_of(s),
-                symbol: s,
+                op: bin_op_of(symbol),
+                symbol,
                 left: Box::new(left),
                 right: Box::new(right),
                 span,
@@ -123,6 +115,19 @@ impl<'a> Parser<'a> {
                 return Ok(Node::Unary {
                     sign,
                     child: Box::new(child),
+                    span,
+                });
+            }
+            // T9a S4：按位非，与一元正负号同层（~2**2 = ~4 = -5，同 Python）
+            if *s == "~" {
+                let start = self.pos;
+                self.advance();
+                let child = self.parse_unary()?;
+                let span: Span = (start, child.span().1);
+                return Ok(Node::Call {
+                    func: "~",
+                    var: None,
+                    args: vec![child],
                     span,
                 });
             }
@@ -216,7 +221,8 @@ impl<'a> Parser<'a> {
             Some(Token::Paren('(')) => {
                 let start = self.pos;
                 self.advance();
-                let mut node = self.parse_add()?;
+                // 括号体接受完整文法（T9a S4：含位运算层）
+                let mut node = self.parse_binary(6)?;
                 if !matches!(self.peek(), Some(Token::Paren(')'))) {
                     return Err(ExprError::expression("Mismatched parentheses: missing ')'"));
                 }
@@ -266,11 +272,12 @@ impl<'a> Parser<'a> {
                     }
                 };
                 self.expect_comma(name)?;
-                let from = self.parse_add()?;
+                // 实参/边界/body 接受完整文法（T9a S4：含位运算层）
+                let from = self.parse_binary(6)?;
                 self.expect_comma(name)?;
-                let to = self.parse_add()?;
+                let to = self.parse_binary(6)?;
                 self.expect_comma(name)?;
-                let body = self.parse_add()?;
+                let body = self.parse_binary(6)?;
                 if !matches!(self.peek(), Some(Token::Paren(')'))) {
                     return Err(ExprError::expression(format!(
                         "{}() expects (var, from, to, body)",
@@ -292,7 +299,8 @@ impl<'a> Parser<'a> {
                 let mut args = Vec::new();
                 if !matches!(self.peek(), Some(Token::Paren(')'))) {
                     loop {
-                        args.push(self.parse_add()?);
+                        // 实参接受完整文法（T9a S4：含位运算层）
+                        args.push(self.parse_binary(6)?);
                         if matches!(self.peek(), Some(Token::Paren(')'))) {
                             self.advance();
                             break;

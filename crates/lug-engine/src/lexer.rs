@@ -145,10 +145,17 @@ pub fn tokenize(s: &str) -> Result<Vec<Token>, ExprError> {
             prev_end = i;
             continue;
         }
+        // T9a S4：移位双字符（先于单字符，孤立 < > 仍不可识别）
+        if i + 1 < n && (c == '<' || c == '>') && chars[i + 1] == c {
+            tokens.push(Token::Op(if c == '<' { "<<" } else { ">>" }));
+            i += 2;
+            prev_end = i;
+            continue;
+        }
 
         // 7. 单字符运算符、逗号（函数实参分隔）与 Unicode 别名
         let op = match c {
-            '+' | '-' | '*' | '/' | '%' => Some(single_to_static(c)),
+            '+' | '-' | '*' | '/' | '%' | '&' | '|' | '~' => Some(single_to_static(c)),
             ',' => Some(","),
             '负' => Some("-"), // 口语负号："负一百" = -100
             '×' => Some("*"),
@@ -217,6 +224,9 @@ fn single_to_static(c: char) -> &'static str {
         '*' => "*",
         '/' => "/",
         '%' => "%",
+        '&' => "&",
+        '|' => "|",
+        '~' => "~",
         _ => unreachable!("调用方已保证字符合法"),
     }
 }

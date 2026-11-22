@@ -116,6 +116,11 @@ pub const REGISTRY: &[OpDef] = &[
     binary(4, "//", "整除", BinOp::FloorDiv, 20, Assoc::Left, &[]),
     binary(5, "%", "取模", BinOp::Mod, 20, Assoc::Left, &[]),
     binary(6, "**", "幂运算", BinOp::Pow, 25, Assoc::Right, &["^"]),
+    // ---- 7–10 位运算（T9a S4，Python 相对序：| < & < 移位 < add）----
+    binary(7, "&", "按位与", BinOp::BitAnd, 7, Assoc::Left, &[]),
+    binary(8, "|", "按位或", BinOp::BitOr, 6, Assoc::Left, &[]),
+    binary(9, "<<", "左移", BinOp::BitShl, 8, Assoc::Left, &[]),
+    binary(10, ">>", "右移", BinOp::BitShr, 8, Assoc::Left, &[]),
     // ---- 16–23 后缀一元 ----
     OpDef {
         code: 16,
@@ -468,6 +473,18 @@ pub const REGISTRY: &[OpDef] = &[
         code: 70,
         symbol: "tanh",
         name: "双曲正切",
+        kind: OpKind::Function,
+        op: None,
+        precedence: 0,
+        associativity: Assoc::Left,
+        aliases: &[],
+        arity: Some(Arity::Exact(1)),
+    },
+    // T9a S4：按位非（前缀一元，与 +/− 同层；补码 ~x = −x−1）
+    OpDef {
+        code: 71,
+        symbol: "~",
+        name: "按位非",
         kind: OpKind::Function,
         op: None,
         precedence: 0,
