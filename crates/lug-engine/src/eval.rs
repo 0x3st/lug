@@ -152,6 +152,28 @@ fn apply_raw(symbol: &str, args: &[Value], ctx: &Ctx) -> Result<Value, String> {
         "sin" => finite(as_f64(&args[0])?.sin()),
         "cos" => finite(as_f64(&args[0])?.cos()),
         "tan" => finite(as_f64(&args[0])?.tan()),
+        // T9a S3：反三角前置域检查（出域报错，不返回 NaN——符合 D3 风格）
+        "asin" => {
+            let x = as_f64(&args[0])?;
+            if !(-1.0..=1.0).contains(&x) {
+                return Err("asin(x): x must be in [-1, 1]".to_string());
+            }
+            finite(x.asin())
+        }
+        "acos" => {
+            let x = as_f64(&args[0])?;
+            if !(-1.0..=1.0).contains(&x) {
+                return Err("acos(x): x must be in [-1, 1]".to_string());
+            }
+            finite(x.acos())
+        }
+        "atan" => finite(as_f64(&args[0])?.atan()),
+        // 象限完整；atan2(0, 0) = 0（Rust f64::atan2 与 Python math.atan2 一致）
+        "atan2" => finite(as_f64(&args[0])?.atan2(as_f64(&args[1])?)),
+        // T9a S3：双曲（溢出 → D3 家族 "Numeric overflow"）
+        "sinh" => finite(as_f64(&args[0])?.sinh()),
+        "cosh" => finite(as_f64(&args[0])?.cosh()),
+        "tanh" => finite(as_f64(&args[0])?.tanh()),
         "gcd" | "lcm" => {
             let sig = format!("{symbol}()");
             for arg in args {
