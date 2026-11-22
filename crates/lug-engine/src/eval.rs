@@ -152,8 +152,126 @@ fn apply_raw(symbol: &str, args: &[Value], ctx: &Ctx) -> Result<Value, String> {
         "sin" => finite(as_f64(&args[0])?.sin()),
         "cos" => finite(as_f64(&args[0])?.cos()),
         "tan" => finite(as_f64(&args[0])?.tan()),
+        "gcd" | "lcm" => {
+            let sig = format!("{symbol}()");
+            for arg in args {
+                int_arg(arg, &sig)?;
+            }
+            Ok(gcd_lcm(symbol, args)?)
+        }
+        "C" | "P" => {
+            // 类型错误信息带签名：C(n, k) / P(n, k)（与域错误前缀一致）
+            let sig = format!("{symbol}(n, k)");
+            let n = int_arg(&args[0], &sig)?;
+            let k = int_arg(&args[1], &sig)?;
+            Ok(combinatorial(symbol, &n, &k, ctx)?)
+        }
         _ => Err(format!("Unknown function '{symbol}'")),
     }
+}
+
+/// 整数实参提取（gcd/lcm/C/P 共用）；Float → 类型错误（v1 新增语义）。
+/// `sig` 为完整签名前缀（如 "gcd()"、"C(n, k)"）。
+fn int_arg(v: &Value, sig: &str) -> Result<BigInt, String> {
+    match v {
+        Value::Int(i) => Ok(BigInt::from(*i)),
+        Value::Big(b) => Ok(b.clone()),
+        Value::Float(_) => Err(format!("{sig}: arguments must be integers")),
+    }
+}
+
+/// 欧几里得辗转相除（|a|、|b| 非负）。
+fn big_gcd(a: &BigInt, b: &BigInt) -> BigInt {
+    let (mut a, mut b) = (a.abs(), b.abs());
+    while !b.is_zero() {
+        let r = &a % &b;
+        a = std::mem::replace(&mut b, r);
+    }
+    a
+}
+
+/// gcd/lcm：整数域，负数取 abs；变参折叠；gcd(0,x)=x，gcd(0,0)=0，lcm(0,x)=0。
+fn gcd_lcm(symbol: &str, args: &[Value]) -> Result<Value, String> {
+    // 单位元：gcd 折叠从 0 起（gcd(0,x)=|x|）；lcm 折叠从 1 起（lcm(1,x)=|x|，
+    // lcm(0,x)=0 由折叠自然得出）
+    let mut acc = if symbol == "gcd" {
+        BigInt::zero()
+    } else {
+        BigInt::one()
+    };
+    for arg in args {
+        let b = int_arg(arg, symbol)?.abs();
+        if symbol == "gcd" {
+            acc = big_gcd(&acc, &b);
+        } else {
+            // lcm(a, b) = |a|/gcd(|a|,|b|) × |b|（先除后乘，中间量不爆炸）
+            let g = big_gcd(&acc, &b);
+            acc = if g.is_zero() {
+                BigInt::zero()
+            } else {
+                acc / g * b
+            };
+        }
+    }
+    Ok(Value::Big(acc))
+}
+
+/// 组合数/排列数：精确 Big 域；域错误前置；护栏 = 迭代上限（镜像阶乘 10000）
+/// + 位数预算预估（D4 家族，镜像幂的预估先拦）。
+fn combinatorial(who: &str, n: &BigInt, k: &BigInt, ctx: &Ctx) -> Result<Value, String> {
+    use num_bigint::Sign;
+    if n.sign() == Sign::Minus || k.sign() == Sign::Minus {
+        return Err(format!("{who}(n, k): arguments must be non-negative integers"));
+    }
+    if k > n {
+        return Err(format!("{who}(n, k): k must not exceed n"));
+    }
+    // 迭代数：C 取 k_eff = min(k, n−k)（对称性，等价改算 C(n, k_eff)）；P 取 k
+    let k_eff = if who == "C" {
+        let nk = n - k;
+        if nk < *k { nk } else { k.clone() }
+    } else {
+        k.clone()
+    };
+    let iters = k_eff
+        .to_u64()
+        .ok_or_else(|| format!("{who}(n, k): argument too large (max {MAX_FACTORIAL_N})"))?;
+    if iters > MAX_FACTORIAL_N {
+        return Err(format!("{who}(n, k): argument too large (max {MAX_FACTORIAL_N})"));
+    }
+    // 位数预估：C(n,k) ≤ n^iters → digits ≤ iters × log10(n) + 1（上界，只多不少）
+    if let Some(nf) = n.to_f64() {
+        if nf > 0.0 {
+            // inf/超界情形：as usize 饱和到 usize::MAX，saturating_add 防 +1 溢出
+            let est = ((iters as f64 * nf.log10()).ceil() as usize).saturating_add(1);
+            if est > ctx.max_digits {
+                return Err(format!(
+                    "Result would have {est} digits (budget: {})",
+                    ctx.max_digits
+                ));
+            }
+        }
+    }
+    let mut r = BigInt::one();
+    if who == "C" {
+        let base = n - k_eff;
+        for i in 1..=iters {
+            // 乘 (n−k_eff+i) 后除 i 恒整除（部分积 = C(n−k_eff+i, i)）
+            r = r * (base.clone() + i) / i;
+        }
+    } else {
+        for i in 0..iters {
+            r *= n.clone() - i;
+        }
+    }
+    let digits = r.to_string().len();
+    if digits > ctx.max_digits {
+        return Err(format!(
+            "Result would have {digits} digits (budget: {})",
+            ctx.max_digits
+        ));
+    }
+    Ok(Value::Big(r))
 }
 
 /// 阶乘：仅非负整数；Big 参数必然超上限（2^63 ≫ 10000）。
