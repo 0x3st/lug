@@ -22,6 +22,7 @@
 
 pub mod audit;
 pub mod keystore;
+pub mod oauth_states;
 
 use worker::{D1Database, D1PreparedStatement, D1Type};
 
