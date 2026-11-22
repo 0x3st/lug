@@ -46,3 +46,9 @@ http = "1"
 # host 单测：读响应体 / 测试运行时（wasm32 check 不编译 dev-deps）
 http-body-util = "0.1"
 tokio = { workspace = true }
+# C10 golden 对照：进程内链接 lug-server（契约源），经 tower oneshot 驱动其
+# router() 与 lug-worker 纯函数 builders 逐字节对照（tests/golden_vs_server.rs）。
+# 仅进 host 测试树——wasm32 依赖树用 `cargo tree -e no-dev` 证实不含
+# lug-server/rand（rand 审计 C10）。
+lug-server = { path = "../lug-server" }
+tower = { version = "0.5", features = ["util"] }
