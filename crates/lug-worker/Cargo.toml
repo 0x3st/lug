@@ -17,4 +17,6 @@ http = "1"
 futures-util = { version = "0.3", default-features = false }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-rand = { workspace = true }
+# NOTE: rand/getrandom intentionally NOT used — getrandom has no default wasm32
+# backend; randomness comes from Workers crypto (web_sys getRandomValues), see
+# crates/lug-worker/src/random.rs (T6).
