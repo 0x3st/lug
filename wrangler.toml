@@ -18,7 +18,7 @@ command = "worker-build --release"
 
 # —— 静态资源：静态优先，API 永远先进 Rust Worker ——
 [assets]
-directory = "./web/dist"
+directory = "./web"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 run_worker_first = ["/f/a/o/*"]
