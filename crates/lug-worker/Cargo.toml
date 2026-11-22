@@ -1,0 +1,18 @@
+[package]
+name = "lug-worker"
+description = "Lug CF Workers 入口：axum Router 挂 fetch handler（workers-rs），引擎零改动链接"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+worker = { version = "0.9", features = ["http", "axum"] }
+worker-macros = { version = "0.9", features = ["http"] }
+axum = { version = "0.8", default-features = false, features = ["json"] }
+tower-service = "0.3.3"
+http = "1"
+futures-util = { version = "0.3", default-features = false }
+serde_json = { workspace = true }

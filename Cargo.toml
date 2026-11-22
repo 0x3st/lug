@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/lug-engine", "crates/lug-server"]
+members = ["crates/lug-engine", "crates/lug-server", "crates/lug-worker"]
 
 [workspace.package]
 version = "1.0.0-alpha.2"
