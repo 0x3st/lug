@@ -9,10 +9,12 @@ license.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-worker = { version = "0.9", features = ["http", "axum"] }
+worker = { version = "0.9", features = ["http", "axum", "d1"] }
 worker-macros = { version = "0.9", features = ["http"] }
 axum = { version = "0.8", default-features = false, features = ["json"] }
 tower-service = "0.3.3"
 http = "1"
 futures-util = { version = "0.3", default-features = false }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
+rand = { workspace = true }
