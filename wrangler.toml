@@ -1,0 +1,41 @@
+# wrangler.toml —— lug（CF Workers）
+# 必填三键：name / main / compatibility_date。main 指向 worker-build 产物。
+# 来源：lug-migration/notes/workers-rs-tech-notes.md §6
+
+name = "lug"
+main = "build/index.js"
+compatibility_date = "2026-11-22"
+
+# —— Rust 构建 ——
+# 预装 worker-build 后 dev 热重载不再重走 install（§7 摩擦项）。
+# panic 防护：wasm32 stable 默认 panic=abort（lib.rs 已置 catch_unwind 结构）；
+# 切 nightly 后启用下行注释的 --panic-unwind 让防护真正生效（重编 std，构建变慢）。
+[build]
+command = "worker-build --release"
+# command = "worker-build --release --panic-unwind"
+
+# —— 静态资源：静态优先，API 永远先进 Rust Worker ——
+[assets]
+directory = "./web"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/f/a/o/*"]
+
+# —— KV（会话，T5 接入）——
+[[kv_namespaces]]
+binding = "KV_SESSIONS"
+id = "<KV_NAMESPACE_ID_PLACEHOLDER>"
+
+# —— D1（Key/审计/OAuth state，T5 接入；schema 见 design/persistence.md）——
+[[d1_databases]]
+binding = "LUGDB"
+database_name = "lug"
+database_id = "<D1_DATABASE_ID_PLACEHOLDER>"
+
+# —— 明文变量（护栏下调：免费档 10ms CPU，大数位数 10^7→10^4）——
+[vars]
+LUG_MAX_VALUE_DIGITS = "10000"
+LUG_MAX_EXPR_LEN = "1024"
+GITHUB_CLIENT_ID = "<GITHUB_CLIENT_ID_PLACEHOLDER>"
+
+# —— secrets 不在此文件：npx wrangler secret put GITHUB_CLIENT_SECRET ——
