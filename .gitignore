@@ -13,3 +13,4 @@ target/
 node_modules/
 audit.log
 .wrangler/
+crates/lug-worker/build/

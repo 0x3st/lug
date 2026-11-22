@@ -3,7 +3,7 @@
 # 来源：lug-migration/notes/workers-rs-tech-notes.md §6
 
 name = "lug"
-main = "build/index.js"
+main = "crates/lug-worker/build/index.js"
 compatibility_date = "2026-11-22"
 
 # —— Rust 构建 ——
@@ -13,7 +13,7 @@ compatibility_date = "2026-11-22"
 # 无效但无害；切 nightly + 启用下行注释的 --panic-unwind（重编 std，panic=unwind，
 # 构建变慢）后防护真正生效，引擎处理任意用户输入不被 isolate 退出打断。
 [build]
-command = "worker-build --release"
+command = "worker-build crates/lug-worker --release"
 # command = "worker-build --release --panic-unwind"
 
 # —— 静态资源：静态优先，API 永远先进 Rust Worker ——
