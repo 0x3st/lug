@@ -12,6 +12,7 @@
 pub mod panic_guard;
 pub mod routes;
 pub mod sse;
+pub mod storage;
 
 #[cfg(target_arch = "wasm32")]
 pub mod entry;
