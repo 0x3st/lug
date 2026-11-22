@@ -128,8 +128,8 @@ pub fn router(state: AppState) -> Router {
         .route("/f/a/o/platform/auth", get(platform_auth_status))
         .route("/f/a/o/platform/me", get(platform_me))
         .route("/f/a/o/platform/usage", get(platform_usage))
-        .route("/f/a/o/platform/auth/github", get(stub))
-        .route("/f/a/o/platform/auth/github/callback", get(stub))
+        .route("/f/a/o/platform/auth/github", get(github_login))
+        .route("/f/a/o/platform/auth/github/callback", get(github_callback))
         .route("/f/a/o/platform/logout", post(platform_logout))
         .route(
             "/f/a/o/platform/keys",
@@ -927,6 +927,177 @@ async fn platform_usage(State(state): State<AppState>, headers: HeaderMap) -> Re
     .await
 }
 
+// ------------------------------------------------------------------ OAuth 回调查询参数
+
+/// parse_qs 等价：按 '&' 分隔、'+' 视作空格、百分号解码、忽略空值。
+/// 平移自 lug-server routes.rs::parse_query（契约源只读）。
+pub fn parse_query(q: &str) -> Vec<(String, String)> {
+    q.split('&')
+        .filter(|s| !s.is_empty())
+        .filter_map(|pair| {
+            let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+            if v.is_empty() {
+                return None; // parse_qs 默认 keep_blank_values=False
+            }
+            Some((percent_decode(k), percent_decode(v)))
+        })
+        .collect()
+}
+
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len()
+                && bytes[i + 1].is_ascii_hexdigit()
+                && bytes[i + 2].is_ascii_hexdigit() =>
+            {
+                let hex = |b: u8| (b as char).to_digit(16).unwrap();
+                out.push(((hex(bytes[i + 1]) << 4) | hex(bytes[i + 2])) as u8);
+                i += 3;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+// ------------------------------------------------------------------ GitHub OAuth 路由
+
+/// GET /f/a/o/platform/auth/github：发起 GitHub 登录
+/// （state 生成 → D1 登记 → state Cookie → 302 authorize URL）。
+async fn github_login(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    worker::send::SendFuture::new(async {
+        match state.flow.begin().await {
+            Ok((st, url)) => {
+                let cookie = crate::platform::cookie_header(
+                    &state.auth.public_url,
+                    &headers,
+                    crate::platform::STATE_COOKIE,
+                    &st,
+                    crate::platform::STATE_TTL as i64,
+                );
+                crate::platform::redirect(&url, vec![cookie])
+            }
+            // lug-server 把 begin 的全部失败（未配置 / state 落库失败）统一
+            // 重定向到同一提示——错误码不区分，防探测。
+            Err(_) => {
+                crate::platform::redirect("/platform?login_error=github_not_configured", vec![])
+            }
+        }
+    })
+    .await
+}
+
+/// GET /f/a/o/platform/auth/github/callback：OAuth 回调。
+/// state 校验（Cookie 常数时间比较 + D1 一次性消费）→ 换取身份 →
+/// 换发会话（KV put + 有界回读确认）→ 302 /platform。
+/// 分支顺序与 lug-server github_callback 逐段一致。
+async fn github_callback(
+    State(state): State<AppState>,
+    axum::extract::RawQuery(raw): axum::extract::RawQuery,
+    headers: HeaderMap,
+) -> Response {
+    worker::send::SendFuture::new(async {
+        // state Cookie 清除头先行（任何失败分支都带回）
+        let cleared = crate::platform::cookie_header(
+            &state.auth.public_url,
+            &headers,
+            crate::platform::STATE_COOKIE,
+            "",
+            0,
+        );
+        let fail = |e: &oauth::OAuthError, mut cookies: Vec<String>| {
+            cookies.push(cleared.clone());
+            crate::platform::redirect(&format!("/platform?login_error={e}"), cookies)
+        };
+
+        if !state.flow.enabled() {
+            return fail(&oauth::OAuthError::GithubNotConfigured, vec![]);
+        }
+        // 查询参数解析（parse_qs 语义：忽略空值；重复参数视为非法）
+        let pairs = parse_query(raw.as_deref().unwrap_or(""));
+        let states: Vec<&str> = pairs
+            .iter()
+            .filter(|(k, _)| k == "state")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        if states.len() != 1 {
+            return fail(&oauth::OAuthError::InvalidOauthState, vec![]);
+        }
+        let browser_state = crate::platform::cookie_value(&headers, crate::platform::STATE_COOKIE)
+            .unwrap_or_default();
+        // 一次性消费：常数时间比较 + D1 DELETE…RETURNING（T6 flow 内部串联）
+        let verifier = match state
+            .flow
+            .consume(states[0].to_string(), browser_state)
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => return fail(&e, vec![]),
+        };
+        if pairs.iter().any(|(k, _)| k == "error") {
+            return fail(&oauth::OAuthError::GithubCancelled, vec![]);
+        }
+        let codes: Vec<&str> = pairs
+            .iter()
+            .filter(|(k, _)| k == "code")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        if codes.len() != 1 || codes[0].len() > 1024 {
+            return fail(&oauth::OAuthError::GithubUnavailable, vec![]);
+        }
+        let user = match state.flow.exchange(codes[0].to_string(), verifier).await {
+            Ok(u) => u,
+            Err(e) => return fail(&e, vec![]),
+        };
+        // 换发会话：旧会话立即失效（尽力而为，同 lug-server）
+        if let Some(old) = crate::platform::cookie_value(&headers, crate::platform::SESSION_COOKIE)
+        {
+            if let Err(err) = state.sessions.revoke(&old).await {
+                worker::console_error!("old session revoke failed (best-effort): {err}");
+            }
+        }
+        // 不透明 token：43 字符 base64url（token_urlsafe(32)），csrf 同规格
+        let token = oauth::util::token_urlsafe(32);
+        let csrf_token = oauth::util::token_urlsafe(32);
+        let user_rec = storage::sessions::SessionUser {
+            provider: user.provider,
+            id: user.id,
+            login: user.login,
+        };
+        // put + 有界回读确认（登录闪断缓解，persistence.md §3.2）：
+        // 写失败 → github_unavailable；回读 3 次 miss（极罕见跨 PoP 最坏情况）
+        // → 放行跳转（会话已落，同 PoP 首读通常即命中）。
+        if let Err(err) = state
+            .sessions
+            .put_confirmed(&token, &user_rec, &csrf_token, storage::audit::unix_now())
+            .await
+        {
+            worker::console_error!("session put failed: {err}");
+            return fail(&oauth::OAuthError::GithubUnavailable, vec![]);
+        }
+        let session_cookie = crate::platform::cookie_header(
+            &state.auth.public_url,
+            &headers,
+            crate::platform::SESSION_COOKIE,
+            &token,
+            storage::sessions::SESSION_TTL as i64,
+        );
+        crate::platform::redirect("/platform", vec![cleared, session_cookie])
+    })
+    .await
+}
+
 // ------------------------------------------------------------------ 兜底
 
 /// 全部未匹配路由：OPTIONS → 204 + CORS；其余 → OpenAI 风格 404
@@ -1307,6 +1478,48 @@ mod tests {
         assert_eq!(
             key_revoked_json("a1b2c3", "revoked"),
             json!({"id": "a1b2c3", "status": "revoked"})
+        );
+    }
+
+    // ---------------- OAuth 回调查询参数（ lug-server parse_query 平移） ----------------
+
+    #[test]
+    fn parse_query_matches_parse_qs_semantics() {
+        assert_eq!(
+            parse_query("state=abc&code=xyz"),
+            vec![
+                ("state".to_string(), "abc".to_string()),
+                ("code".to_string(), "xyz".to_string())
+            ]
+        );
+        // 空值忽略（keep_blank_values=False）
+        assert_eq!(
+            parse_query("state=&code=xyz"),
+            vec![("code".to_string(), "xyz".to_string())]
+        );
+        assert_eq!(parse_query(""), Vec::<(String, String)>::new());
+        // 无 '=' 的裸键：值视为空 → 忽略
+        assert_eq!(parse_query("state"), Vec::<(String, String)>::new());
+        // '+' 视作空格、百分号解码
+        assert_eq!(
+            parse_query("a=a+b%21&code=c%2Fd"),
+            vec![
+                ("a".to_string(), "a b!".to_string()),
+                ("code".to_string(), "c/d".to_string())
+            ]
+        );
+        // 不完整 % 序列原样保留（与 lug-server percent_decode 一致）
+        assert_eq!(
+            parse_query("a=%zz"),
+            vec![("a".to_string(), "%zz".to_string())]
+        );
+        // 重复参数保留两条（回调侧按 count 判非法）
+        assert_eq!(
+            parse_query("state=1&state=2"),
+            vec![
+                ("state".to_string(), "1".to_string()),
+                ("state".to_string(), "2".to_string())
+            ]
         );
     }
 }
