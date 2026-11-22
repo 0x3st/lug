@@ -11,6 +11,7 @@
 
 pub mod oauth;
 pub mod panic_guard;
+pub mod platform;
 pub mod routes;
 pub mod sse;
 pub mod storage;
