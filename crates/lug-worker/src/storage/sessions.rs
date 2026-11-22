@@ -1,4 +1,4 @@
-//! 会话存储，Workers KV 后端（绑定 `KV_SESSIONS`）。对齐
+//! 会话存储，Workers KV 后端（绑定 `SESSIONS`）。对齐
 //! `lug-server/src/platform.rs` 的 `SessionStore`（create/get/revoke），语义
 //! 对照见 persistence.md 附录 B #7。
 //!

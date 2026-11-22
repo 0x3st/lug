@@ -12,3 +12,4 @@ lug.env
 target/
 node_modules/
 audit.log
+.wrangler/

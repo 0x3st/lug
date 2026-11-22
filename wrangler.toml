@@ -26,20 +26,23 @@ run_worker_first = ["/f/a/o/*"]
 # —— KV（会话，T5 接入）——
 [[kv_namespaces]]
 binding = "SESSIONS"
-id = "<KV_NAMESPACE_ID>"
+id = "046bac0a46d04cdabfb249522b64e214"
 # preview_id = "<...>"    # wrangler dev 用的独立 namespace（可选）
 
 # —— D1（Key/审计/OAuth state，T5 接入）——
 [[d1_databases]]
 binding = "LUGDB"
-database_name = "lug"
-database_id = "<D1_DATABASE_ID>"
+database_name = "lug-cf-workers"
+database_id = "5aff4644-25a6-4cfd-9d35-4553ea519420"
 
 # —— 明文变量（可入库；护栏下调：免费档 10ms CPU，大数位数 10^7→10^4）——
 [vars]
 LUG_MAX_VALUE_DIGITS = "10000"
 LUG_MAX_EXPR_LEN = "1024"
 GITHUB_CLIENT_ID = "<GITHUB_CLIENT_ID>"
-LUG_REDIRECT_URI = "https://lug.example.com/f/a/o/platform/auth/github/callback"
+# 站点公网根 URL（偏离 tech-notes §6 的 LUG_REDIRECT_URI 写法：persistence.md §4
+# 的配置映射 + 与 lug-server AuthConfig 校验逐字节一致；redirect_uri 由
+# LUG_PUBLIC_URL + /f/a/o/platform/auth/github/callback 派生，oauth::VAR_PUBLIC_URL）
+LUG_PUBLIC_URL = "https://lug.example.com"
 
 # —— secrets 不进本文件：npx wrangler secret put GITHUB_CLIENT_SECRET ——
