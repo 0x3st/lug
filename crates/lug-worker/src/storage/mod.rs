@@ -23,6 +23,7 @@
 pub mod audit;
 pub mod keystore;
 pub mod oauth_states;
+pub mod sessions;
 
 use worker::{D1Database, D1PreparedStatement, D1Type};
 
@@ -82,6 +83,11 @@ pub(crate) mod row {
 
     fn err(col: &str, why: &str) -> Error {
         Error::from(format!("d1 row: column `{col}` {why}"))
+    }
+
+    /// 不针对具体列的结构性错误（如缺失嵌套对象）。
+    pub(crate) fn err_plain(msg: &str) -> Error {
+        Error::from(msg.to_string())
     }
 
     pub(crate) fn as_object<'a>(v: &'a Value) -> Result<&'a serde_json::Map<String, Value>, Error> {
