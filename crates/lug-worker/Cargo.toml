@@ -20,3 +20,8 @@ sha2 = { workspace = true }
 # NOTE: rand/getrandom intentionally NOT used — getrandom has no default wasm32
 # backend; randomness comes from Workers crypto (web_sys getRandomValues), see
 # crates/lug-worker/src/random.rs (T6).
+# T6-oauth 追加：web-sys 仅用于 oauth/random.rs 的 CSPRNG（crypto.getRandomValues，
+# 即 rand::RngCore::fill_bytes 的 wasm32 等价物；rand/getrandom 无默认 wasm32 后端，
+# skeleton 6c77725 已撤销）。版本对齐 worker 0.9 的锁定版本：
+# cargo tree -p worker -i web-sys → web-sys 0.3.107。
+web-sys = { version = "0.3.107", features = ["Crypto", "WorkerGlobalScope"] }
