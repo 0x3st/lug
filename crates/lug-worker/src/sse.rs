@@ -4,8 +4,9 @@
 //! 原实现用 axum `Sse` + `KeepAlive`；但 axum 0.8 的 sse 模块 feature-gate
 //! 在 `tokio`，KeepAlive 内部 `tokio::time::sleep` 在 Workers 上无 reactor
 //! 会 panic（见 lug-migration/notes/workers-rs-tech-notes.md §2）。
-//! 此处改为手写：事件拼 `data: {json}\n\n` 帧，经 `worker::Body::from_stream`
-//! 变 JS ReadableStream 回放，零延迟即发即收（§4.2：事件即算即发）。
+//! 此处改为手写：事件拼 `data: {json}\n\n` 帧（本模块纯函数，host 可测），
+//! wasm 侧经 `entry::sse_response`（`worker::Body::from_stream`）变 JS
+//! ReadableStream 回放，零延迟即发即收（§4.2：事件即算即发）。
 
 use serde_json::json;
 
@@ -52,23 +53,6 @@ pub fn build_events(expr: &str, output: &lug_engine_shim::EvalOutput) -> Vec<Str
 
     frames.push(sse_frame("[DONE]"));
     frames
-}
-
-/// 回放响应：预生成帧 → ReadableStream（路线 B：http feature 标准响应）。
-/// 头部自设：from_stream 不自动补 Content-Type。
-pub fn sse_response(frames: Vec<String>) -> http::Response<worker::Body> {
-    let stream = futures_util::stream::iter(
-        frames
-            .into_iter()
-            .map(|frame| Ok::<_, std::convert::Infallible>(frame.into_bytes())),
-    );
-    let body = worker::Body::from_stream(stream).expect("infallible stream conversion");
-    http::Response::builder()
-        .status(200)
-        .header("Content-Type", "text/event-stream")
-        .header("Cache-Control", "no-store")
-        .body(body)
-        .expect("static SSE response parts are valid")
 }
 
 /// 兼容垫片：骨架阶段 lug-engine 尚未接入（T7 接线），

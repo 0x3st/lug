@@ -6,17 +6,29 @@ edition.workspace = true
 license.workspace = true
 
 [lib]
+# cdylib = wrangler/worker-build 的 wasm 部署产物；rlib = host 单测可链接。
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-worker = { version = "0.9", features = ["http", "axum", "d1"] }
-worker-macros = { version = "0.9", features = ["http"] }
+# 通用依赖（host 亦编译可测）。axum 必须 default-features = false：
+# 默认 feature 含 tokio/hyper，Workers 上无 tokio reactor（tech-notes §1）。
 axum = { version = "0.8", default-features = false, features = ["json"] }
 tower-service = "0.3.3"
-http = "1"
-futures-util = { version = "0.3", default-features = false }
+futures = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 # NOTE: rand/getrandom intentionally NOT used — getrandom has no default wasm32
 # backend; randomness comes from Workers crypto (web_sys getRandomValues), see
 # crates/lug-worker/src/random.rs (T6).
+
+# worker/worker-macros 是 wasm-only crate：仅在 wasm32 目标编译，
+# host `cargo test -p lug-worker` 不链接它们（tech-notes §1，验收 2 的前提）。
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+worker = { workspace = true, features = ["d1"] }
+worker-macros = { workspace = true }
+http = "1"
+
+[dev-dependencies]
+# host 单测：读响应体 / 测试运行时（wasm32 check 不编译 dev-deps）
+http-body-util = "0.1"
+tokio = { workspace = true }
