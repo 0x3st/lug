@@ -17,7 +17,7 @@ use axum::{Json, Router};
 use serde_json::json;
 use std::sync::Arc;
 
-use crate::oauth::{self, WorkerAuthConfig, WorkerGithubFlow};
+use crate::oauth::{self, GithubFlow, WorkerAuthConfig, WorkerGithubFlow};
 use crate::panic_guard;
 use crate::storage::{self, keystore::KeyRec};
 
@@ -125,14 +125,20 @@ pub fn router(state: AppState) -> Router {
         .route("/f/a/o/operator", get(operator_table))
         .route("/f/a/o/calculate", post(calculate))
         // 控制台（GitHub OAuth + Key 管理）
-        .route("/f/a/o/platform/auth", get(stub))
-        .route("/f/a/o/platform/me", get(stub))
-        .route("/f/a/o/platform/usage", get(stub))
+        .route("/f/a/o/platform/auth", get(platform_auth_status))
+        .route("/f/a/o/platform/me", get(platform_me))
+        .route("/f/a/o/platform/usage", get(platform_usage))
         .route("/f/a/o/platform/auth/github", get(stub))
         .route("/f/a/o/platform/auth/github/callback", get(stub))
-        .route("/f/a/o/platform/logout", post(stub))
-        .route("/f/a/o/platform/keys", get(stub).post(stub))
-        .route("/f/a/o/platform/keys/{id}", axum::routing::delete(stub))
+        .route("/f/a/o/platform/logout", post(platform_logout))
+        .route(
+            "/f/a/o/platform/keys",
+            get(platform_keys_list).post(platform_keys_create),
+        )
+        .route(
+            "/f/a/o/platform/keys/{id}",
+            axum::routing::delete(platform_key_revoke),
+        )
         .fallback(fallback)
         // 已注册路径的未支持方法（如 OPTIONS/DELETE）也走统一兜底
         .method_not_allowed_fallback(fallback)
@@ -498,6 +504,55 @@ async fn require_api_key(state: &AppState, headers: &HeaderMap) -> Result<KeyRec
     }
 }
 
+// ------------------------------------------------------------------ 平台会话鉴权
+
+/// 会话鉴权结果（lug-server routes.rs::SessionAuth 平移）。
+struct SessionAuth {
+    token: String,
+    rec: storage::sessions::SessionRecord,
+    owner: String,
+}
+
+/// Cookie / X-Session-Token 会话鉴权（lug-server auth_session 平移）：
+/// KV 查询是唯一异步点；过期/无效 → 401 invalid_session；写操作要求
+/// 同源 + CSRF（platform::write_guards）。KV 读失败 → fail-closed 401
+/// （无法验证会话即拒绝；lug-server 无对应失败面）。
+async fn auth_session(
+    state: &AppState,
+    headers: &HeaderMap,
+    write: bool,
+) -> Result<SessionAuth, Response> {
+    worker::send::SendFuture::new(async {
+        let (header_token, cookie_token) = crate::platform::session_tokens(headers);
+        let token = header_token
+            .clone()
+            .or_else(|| cookie_token.clone())
+            .unwrap_or_default();
+        let rec = match state.sessions.get(&token).await {
+            Ok(Some(rec)) => rec,
+            Ok(None) => return Err(crate::platform::invalid_session_response()),
+            Err(err) => {
+                worker::console_error!("session lookup failed: {err}");
+                return Err(crate::platform::invalid_session_response());
+            }
+        };
+        // 注：Cookie 会话下 CSRF 不匹配统一在写操作的 403 invalid_csrf 中拒绝
+        //（跨站/篡改的 CSRF 属于请求伪造，不泄露会话轮换信息）
+        if write {
+            crate::platform::write_guards(
+                headers,
+                &state.auth.public_url,
+                &rec.csrf_token,
+                header_token.is_some(),
+            )?;
+        }
+        let owner = crate::platform::owner_id(&rec.user)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
+        Ok(SessionAuth { token, rec, owner })
+    })
+    .await
+}
+
 // ------------------------------------------------------------------ handlers
 
 /// 验活：200 + JSON 状态体（自定结构，供部署探针/冒烟用）。
@@ -653,6 +708,221 @@ async fn calculate(
             StatusCode::OK,
             calculate_ok_json(&request_id, unix_now_secs(), &expr, &output),
         )
+    })
+    .await
+}
+
+// ------------------------------------------------------------------ 平台控制台 API
+
+/// 平台响应纯面（golden 对照测试直测；handlers 只做会话/存储胶水）。
+
+/// GET /f/a/o/platform/auth：登录选项（公开）。
+pub fn auth_status_json(github_enabled: bool) -> serde_json::Value {
+    json!({"github_enabled": github_enabled})
+}
+
+/// GET /f/a/o/platform/keys：当前用户的 Key 列表（不含哈希/属主）。
+pub fn keys_list_json(keys: &[storage::keystore::KeyPublic]) -> serde_json::Value {
+    json!({
+        "object": "list",
+        "data": keys.iter().map(storage::keystore::KeyPublic::to_public_json).collect::<Vec<_>>(),
+    })
+}
+
+/// POST /f/a/o/platform/keys：签发响应（明文仅本次返回；字段序同 lug-server）。
+pub fn key_created_json(rec: &storage::keystore::KeyRec, raw: &str) -> serde_json::Value {
+    json!({
+        "id": rec.id, "name": rec.name, "key": raw,
+        "prefix": rec.prefix, "created_at": rec.created_at,
+        "note": "Save this key now; it will not be shown again.",
+    })
+}
+
+/// DELETE /f/a/o/platform/keys/{id}：撤销响应。
+pub fn key_revoked_json(id: &str, status: &str) -> serde_json::Value {
+    json!({"id": id, "status": status})
+}
+
+/// GET /f/a/o/platform/auth：登录选项（公开）。
+async fn platform_auth_status(State(state): State<AppState>) -> Response {
+    json_response(StatusCode::OK, auth_status_json(state.flow.enabled()))
+}
+
+/// GET /f/a/o/platform/me：当前会话（用户 + CSRF）。
+async fn platform_me(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    worker::send::SendFuture::new(async {
+        let s = match auth_session(&state, &headers, false).await {
+            Ok(s) => s,
+            Err(r) => return r,
+        };
+        json_response(
+            StatusCode::OK,
+            json!({"user": s.rec.user.to_json(), "csrf_token": s.rec.csrf_token}),
+        )
+    })
+    .await
+}
+
+/// POST /f/a/o/platform/logout：撤销会话 + 清 Cookie。
+async fn platform_logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    worker::send::SendFuture::new(async {
+        let s = match auth_session(&state, &headers, true).await {
+            Ok(s) => s,
+            Err(r) => return r,
+        };
+        // 撤销尽力而为（KV delete 失败不阻断登出；传播 ≤60s 见 persistence.md R1）
+        if let Err(err) = state.sessions.revoke(&s.token).await {
+            worker::console_error!("session revoke failed (best-effort): {err}");
+        }
+        let cleared = crate::platform::cookie_header(
+            &state.auth.public_url,
+            &headers,
+            crate::platform::SESSION_COOKIE,
+            "",
+            0,
+        );
+        let mut res = json_response(StatusCode::OK, json!({"ok": true}));
+        res.headers_mut()
+            .append("Set-Cookie", cleared.parse().unwrap());
+        res
+    })
+    .await
+}
+
+/// GET /f/a/o/platform/keys：当前用户的 Key 列表（不含哈希/属主）。
+async fn platform_keys_list(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    worker::send::SendFuture::new(async {
+        let s = match auth_session(&state, &headers, false).await {
+            Ok(s) => s,
+            Err(r) => return r,
+        };
+        match state.keys.list_public(&s.owner).await {
+            Ok(keys) => json_response(StatusCode::OK, keys_list_json(&keys)),
+            Err(err) => {
+                worker::console_error!("keys list failed: {err}");
+                storage_error_response()
+            }
+        }
+    })
+    .await
+}
+
+/// POST /f/a/o/platform/keys：签发新 Key（明文仅本次返回）。
+async fn platform_keys_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    worker::send::SendFuture::new(async {
+        let s = match auth_session(&state, &headers, true).await {
+            Ok(s) => s,
+            Err(r) => return r,
+        };
+        // 请求体校验错误消息与 calculate 同源（lug-server 逐字节一致）
+        if body.is_empty() {
+            return reject_empty_body();
+        }
+        let parsed: serde_json::Value = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(_) => return reject_invalid_json(),
+        };
+        let Some(obj) = parsed.as_object() else {
+            return reject_not_object();
+        };
+        let name = obj.get("name").and_then(|v| v.as_str()).map(str::to_string);
+        // 明文 `sk-` key（36B base64url）+ 12 字符 id（6B hex）：
+        // lug-server KeyStore::create 的随机半段上移到 handler，走平台 CSPRNG。
+        let raw = format!(
+            "sk-{}",
+            crate::oauth::util::base64url(&crate::oauth::random::token_bytes(36))
+        );
+        let kid = crate::oauth::util::hex_encode(&crate::oauth::random::token_bytes(6));
+        match state
+            .keys
+            .create(
+                &kid,
+                &raw,
+                name.as_deref(),
+                &s.owner,
+                storage::audit::unix_now(),
+            )
+            .await
+        {
+            Ok(rec) => json_response(StatusCode::OK, key_created_json(&rec, &raw)),
+            // lug-server 把持久化失败映射为 500 invalid_request_error（消息透传）
+            Err(err) => api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &err.to_string(),
+                "invalid_request_error",
+                None,
+            ),
+        }
+    })
+    .await
+}
+
+/// DELETE /f/a/o/platform/keys/{id}：撤销当前用户自己的 Key。
+async fn platform_key_revoke(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(kid): axum::extract::Path<String>,
+) -> Response {
+    worker::send::SendFuture::new(async {
+        let s = match auth_session(&state, &headers, true).await {
+            Ok(s) => s,
+            Err(r) => return r,
+        };
+        match state.keys.revoke_scoped(&kid, &s.owner).await {
+            Ok(Some(rec)) => {
+                // Key 生命周期审计（§10.7 审计不能省）。kind 取值差异：
+                // lug-server 写 "key_revoked"，但 D1 schema CHECK 只收
+                // ok|error（persistence.md §2.2，T5 冻结）——写 "key_revoked"
+                // 会被 CHECK 拒绝、审计行整个丢失。取 kind="ok"（expression
+                // 前缀 `key:revoke:` + outcome=revoked 保留全部事件信息），
+                // 保证行落库。deviation 记录见交付报告。
+                state.audit.record(&storage::audit::AuditEntry {
+                    key_id: "-",
+                    key_prefix: &rec.prefix,
+                    request_id: "-",
+                    expression: &format!("key:revoke:{}", rec.id),
+                    kind: "ok",
+                    outcome: &rec.status,
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    duration_ms: 0,
+                });
+                json_response(StatusCode::OK, key_revoked_json(&rec.id, &rec.status))
+            }
+            // RETURNING 0 行 = 未命中/他人 Key/已撤销 → 404（IDOR 语义）
+            Ok(None) => api_error(
+                StatusCode::NOT_FOUND,
+                &format!("Unknown key id: {kid}"),
+                "invalid_request_error",
+                None,
+            ),
+            Err(err) => {
+                worker::console_error!("key revoke failed: {err}");
+                storage_error_response()
+            }
+        }
+    })
+    .await
+}
+
+/// GET /f/a/o/platform/usage：当前用户的用量汇总。
+async fn platform_usage(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    worker::send::SendFuture::new(async {
+        let s = match auth_session(&state, &headers, false).await {
+            Ok(s) => s,
+            Err(r) => return r,
+        };
+        match state.keys.list_public(&s.owner).await {
+            Ok(keys) => json_response(StatusCode::OK, usage_report_json(&keys)),
+            Err(err) => {
+                worker::console_error!("usage report failed: {err}");
+                storage_error_response()
+            }
+        }
     })
     .await
 }
@@ -994,5 +1264,49 @@ mod tests {
         assert_eq!(bearer_key(&hm("Basic xyz")), "");
         let empty = HeaderMap::new();
         assert_eq!(bearer_key(&empty), "");
+    }
+
+    // ---------------- platform 响应纯面 ----------------
+
+    #[test]
+    fn platform_response_builders_field_order() {
+        // auth status
+        let v = auth_status_json(false);
+        assert_eq!(v, json!({"github_enabled": false}));
+        // keys list
+        let v = keys_list_json(&[keypub("a", 1, 10, 20, 30)]);
+        assert_eq!(v["object"], "list");
+        assert_eq!(v["data"].as_array().unwrap().len(), 1);
+        assert_eq!(v["data"][0]["id"], "a");
+        assert!(v["data"][0].get("key_hash").is_none());
+        assert!(v["data"][0].get("owner_id").is_none());
+        // key created（字段序 = lug-server platform_keys_create）
+        let rec = storage::keystore::KeyRec {
+            id: "a1b2c3".into(),
+            owner_id: "github:1".into(),
+            name: "default".into(),
+            key_hash: "h".into(),
+            prefix: "sk-x...y".into(),
+            created_at: 1_700_000_000,
+            status: "active".into(),
+            last_used: None,
+            usage_requests: 0,
+            usage_prompt_tokens: 0,
+            usage_completion_tokens: 0,
+            usage_total_tokens: 0,
+        };
+        let v = key_created_json(&rec, "sk-plaintext");
+        let keys: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+        assert_eq!(
+            keys,
+            vec!["id", "name", "key", "prefix", "created_at", "note"]
+        );
+        assert_eq!(v["key"], "sk-plaintext");
+        assert_eq!(v["note"], "Save this key now; it will not be shown again.");
+        // key revoked
+        assert_eq!(
+            key_revoked_json("a1b2c3", "revoked"),
+            json!({"id": "a1b2c3", "status": "revoked"})
+        );
     }
 }

@@ -65,6 +65,18 @@ pub(crate) fn absolute_expiration(now: i64) -> u64 {
     (now.max(0) as u64).saturating_add(SESSION_TTL)
 }
 
+impl SessionUser {
+    /// 公开 JSON（字段序同 lug-server `User::to_json`；preserve_order 下插入序
+    /// 即输出序）。
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "provider": self.provider,
+            "id": self.id,
+            "login": self.login,
+        })
+    }
+}
+
 /// KV key：`sess:<token>`。
 pub(crate) fn session_key(token: &str) -> String {
     format!("{KEY_PREFIX}{token}")
@@ -86,7 +98,10 @@ impl SessionRecord {
     /// KV 值（JSON 文本反序列化产物）→ 会话记录。
     pub(crate) fn from_value(v: &serde_json::Value) -> worker::Result<Self> {
         let r = row::as_object(v)?;
-        let user = row::as_object(r.get("user").ok_or_else(|| row::err_plain("session: missing `user`"))?)?;
+        let user = row::as_object(
+            r.get("user")
+                .ok_or_else(|| row::err_plain("session: missing `user`"))?,
+        )?;
         Ok(Self {
             user: SessionUser {
                 provider: row::text(user, "provider")?,
@@ -156,7 +171,12 @@ impl SessionStore {
 
     /// 读取会话；空值即未登录（过期由 KV 自动过期替代原「顺手 remove」）。
     pub async fn get(&self, token: &str) -> worker::Result<Option<SessionRecord>> {
-        match self.kv.get(&session_key(token)).json::<serde_json::Value>().await? {
+        match self
+            .kv
+            .get(&session_key(token))
+            .json::<serde_json::Value>()
+            .await?
+        {
             Some(v) => SessionRecord::from_value(&v).map(Some),
             None => Ok(None),
         }
@@ -219,7 +239,15 @@ mod tests {
             })
         );
         // 往返
-        assert_eq!(SessionRecord::from_value(&rec.to_json_value()).unwrap(), rec);
+        assert_eq!(
+            SessionRecord::from_value(&rec.to_json_value()).unwrap(),
+            rec
+        );
+        // 用户公开 JSON（lug-server User::to_json 契约）
+        assert_eq!(
+            rec.user.to_json(),
+            json!({"provider": "github", "id": "12345", "login": "octo"})
+        );
     }
 
     #[test]
