@@ -24,6 +24,15 @@ worker = { workspace = true, features = ["d1"] }
 # NOTE: rand/getrandom intentionally NOT used — getrandom has no default wasm32
 # backend; randomness comes from Workers crypto (web_sys getRandomValues), see
 # crates/lug-worker/src/oauth/random.rs (T6).
+# T6-oauth 追加：web-sys 仅用于 oauth/random.rs 的 CSPRNG（crypto.getRandomValues，
+# 即 rand::RngCore::fill_bytes 的 wasm32 等价物；rand/getrandom 无默认 wasm32 后端，
+# skeleton 6c77725 已撤销）。版本对齐 worker 0.9 的锁定版本：
+# cargo tree -p worker -i web-sys → web-sys 0.3.107。
+# 集成侧调整：保持门控外公共依赖——oauth/random.rs 在未门控模块中以裸
+# web_sys:: 路径引用 Crypto/WorkerGlobalScope，若门控进 wasm32 段则 oauth
+# 无法 host 编译，26 个 oauth host 用例全部丢失（host 单测仍不触达运行时
+# getRandomValues，wasm-bindgen 导入桩 host 下仅编译不执行）。
+web-sys = { version = "0.3.107", features = ["Crypto", "WorkerGlobalScope"] }
 
 # 仅 wasm32 入口胶水（entry.rs 的 #[event(fetch)]）使用：host 不编译。
 [target.'cfg(target_arch = "wasm32")'.dependencies]
